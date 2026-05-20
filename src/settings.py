@@ -1,0 +1,10 @@
+# App settings
+APP_NAME = "پروژه جدید"
+APP_WINDOW_WIDTH = 900
+APP_WINDOW_HEIGHT = 600
+APP_LOCALE = "fa_IR"
+APP_LAYOUT_DIRECTION = "rtl"
+
+# Authentication settings
+DEFAULT_ADMIN_USERNAME = "admin"
+DEFAULT_ADMIN_PASSWORD = "1"
