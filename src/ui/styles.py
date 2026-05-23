@@ -430,6 +430,10 @@ def get_app_stylesheet() -> str:
     #DialogSubtitle {
         color: #6b7280;
     }
+    #ScanPrintStatus {
+        color: #9ca3af;
+        font-size: 11px;
+    }
     #PageTitle {
         font-size: 22px;
         font-weight: 700;

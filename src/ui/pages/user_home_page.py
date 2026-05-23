@@ -730,10 +730,32 @@ class UserHomePage(QWidget):
         if row < 0:
             return
         item = self.results_table.item(row, 2)
-        if item is None:
-            return
-        base = item.text().strip()
-        item.setText(f"{base} | {suffix}" if base else suffix)
+        base = item.text().strip() if item is not None else ""
+        if item is not None:
+            item.setText("")
+
+        cell = QWidget()
+        layout = QHBoxLayout(cell)
+        layout.setContentsMargins(6, 2, 6, 2)
+        layout.setSpacing(6)
+        layout.setAlignment(Qt.AlignCenter)
+
+        if base:
+            detail_label = QLabel(base)
+            detail_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(detail_label)
+
+            sep = QLabel("|")
+            sep.setObjectName("ScanPrintStatus")
+            sep.setAlignment(Qt.AlignCenter)
+            layout.addWidget(sep)
+
+        print_label = QLabel(suffix)
+        print_label.setObjectName("ScanPrintStatus")
+        print_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(print_label)
+
+        self.results_table.setCellWidget(row, 2, cell)
 
     def _build_print_items(
         self, product_values: dict[str, Any], priorities: list[dict[str, str]]
@@ -789,15 +811,14 @@ class UserHomePage(QWidget):
         if printer_type == PRINTER_TYPE_A520I:
             adapter = _SendAllAdapter(link)
             if send_to_printer(print_items, adapter):
-                count_label = f"{len(print_items)} مورد"
-                self._annotate_last_result(f"چاپ: ارسال {count_label} به «{printer_name}» انجام شد")
+                self._annotate_last_result(f"چاپ: ارسال به «{printer_name}» انجام شد")
             else:
                 self._annotate_last_result(f"چاپ: خطا در ارسال به «{printer_name}»")
             return
 
         payload = "\n".join(print_items) + "\n"
         self._write_device_text(printer_name, payload)
-        self._annotate_last_result(f"چاپ: ارسال {len(print_items)} مورد به «{printer_name}» انجام شد")
+        self._annotate_last_result(f"چاپ: ارسال به «{printer_name}» انجام شد")
 
     def _trigger_rejector_sequence(self) -> None:
         rname = str(self._scanner_conn.get("target_rejector", "")).strip()
