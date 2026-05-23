@@ -222,12 +222,8 @@ class UserDeviceConfigPage(QWidget):
         self.printer_settings_title = QLabel("تنظیمات مخصوص پرینتر")
         self.printer_settings_title.setObjectName("FormFieldLabel")
         self.printer_type_selector = StyledComboField()
-        self.printer_type_selector.combo_box.addItem("A", "A")
-        self.printer_type_selector.combo_box.addItem("B", "B")
-        current_printer_type = str(config.get("printer_type", "A")).strip().upper()
-        self.printer_type_selector.combo_box.setCurrentText(
-            current_printer_type if current_printer_type in {"A", "B"} else "A"
-        )
+        self.printer_type_selector.combo_box.addItem("A520i", "A520i")
+        self.printer_type_selector.combo_box.setCurrentIndex(0)
         self.printer_type_selector.currentIndexChanged.connect(self._save)
 
         self.print_priority_title = QLabel("موارد چاپ به ترتیب اولویت")
@@ -592,7 +588,9 @@ class UserDeviceConfigPage(QWidget):
             payload["target_rejector"] = str(self.target_rejector_selector.combo_box.currentData() or "").strip()
             payload["lookup_field"] = str(self.lookup_field_selector.combo_box.currentData() or "").strip()
         if self._device_type == "printer":
-            payload["printer_type"] = str(self.printer_type_selector.combo_box.currentData() or "A").strip()
+            payload["printer_type"] = str(
+                self.printer_type_selector.combo_box.currentData() or "A520i"
+            ).strip()
             payload["print_priorities"] = [dict(item) for item in self._print_priorities]
         if self._device_type == "rejector":
             payload["rejector_delay_before_ms"] = str(self.rejector_delay_spin.value())

@@ -24,6 +24,66 @@ def _settings() -> QSettings:
     return QSettings(_ORG_NAME, _APP_NAME)
 
 
+PRINTER_TYPE_A520I = "A520i"
+
+
+def _normalize_printer_type(raw: object) -> str:
+    text = str(raw or "").strip()
+    if text.upper() in {"A", "B", "A520I"}:
+        return PRINTER_TYPE_A520I
+    if text == PRINTER_TYPE_A520I:
+        return PRINTER_TYPE_A520I
+    return PRINTER_TYPE_A520I
+
+
+def resolve_print_priorities(config: dict) -> list[dict[str, str]]:
+    """Return print priority rows from device connection config (incl. legacy keys)."""
+    raw_pri = config.get("print_priorities", [])
+    if isinstance(raw_pri, str):
+        try:
+            raw_pri = json.loads(raw_pri)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raw_pri = []
+
+    priorities: list[dict[str, str]] = []
+    if isinstance(raw_pri, list):
+        for item in raw_pri:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            source_type = str(item.get("source_type", "")).strip()
+            source_value = str(item.get("source_value", "")).strip()
+            is_valid = source_type in {"manual", "product_field"} and bool(name)
+            if source_type == "product_field":
+                is_valid = is_valid and bool(source_value)
+            if is_valid:
+                priorities.append(
+                    {
+                        "name": name,
+                        "source_type": source_type,
+                        "source_value": source_value,
+                    }
+                )
+
+    if priorities:
+        return priorities
+
+    for legacy_key in ("print_priority_1", "print_priority_2", "print_priority_3"):
+        value = str(config.get(legacy_key, "")).strip()
+        if not value:
+            continue
+        source_type = "product_field" if value.startswith("فیلد: ") else "manual"
+        source_value = value.removeprefix("فیلد: ").strip() if source_type == "product_field" else value
+        priorities.append(
+            {
+                "name": legacy_key.replace("print_priority_", "اولویت "),
+                "source_type": source_type,
+                "source_value": source_value,
+            }
+        )
+    return priorities
+
+
 def _non_negative_ms_string(raw: object) -> str:
     try:
         return str(max(0, int(str(raw).strip())))
@@ -479,9 +539,7 @@ def get_device_connections_by_user() -> dict[str, dict[str, dict[str, str]]]:
             target_printer = str(config.get("target_printer", "")).strip()
             target_rejector = str(config.get("target_rejector", "")).strip()
             lookup_field = str(config.get("lookup_field", "")).strip()
-            printer_type = str(config.get("printer_type", "")).strip().upper()
-            if printer_type not in {"A", "B"}:
-                printer_type = "A"
+            printer_type = _normalize_printer_type(config.get("printer_type", PRINTER_TYPE_A520I))
             print_priority_1 = str(config.get("print_priority_1", "")).strip()
             print_priority_2 = str(config.get("print_priority_2", "")).strip()
             print_priority_3 = str(config.get("print_priority_3", "")).strip()
@@ -551,9 +609,7 @@ def save_device_connections_by_user(connections_by_user: dict[str, dict[str, dic
             target_printer = str(config.get("target_printer", "")).strip()
             target_rejector = str(config.get("target_rejector", "")).strip()
             lookup_field = str(config.get("lookup_field", "")).strip()
-            printer_type = str(config.get("printer_type", "")).strip().upper()
-            if printer_type not in {"A", "B"}:
-                printer_type = "A"
+            printer_type = _normalize_printer_type(config.get("printer_type", PRINTER_TYPE_A520I))
             print_priority_1 = str(config.get("print_priority_1", "")).strip()
             print_priority_2 = str(config.get("print_priority_2", "")).strip()
             print_priority_3 = str(config.get("print_priority_3", "")).strip()

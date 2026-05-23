@@ -25,7 +25,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from printers.A520i import send_to_printer
 from user_store import (
+    PRINTER_TYPE_A520I,
+    _normalize_printer_type,
     get_device_connections_by_user,
     get_devices_by_user,
     get_product_scan_detail_fields_by_user,
@@ -33,6 +36,7 @@ from user_store import (
     get_product_structures,
     get_products_by_user,
     get_scan_results_limit,
+    resolve_print_priorities,
 )
 
 try:
@@ -51,6 +55,56 @@ def _nz_int(raw: object) -> int:
 _START_BUTTON_LABEL = "▶  شروع"
 _STOP_BUTTON_LABEL = "■  توقف"
 _CONNECTING_BUTTON_LABEL = "⏳  در حال اتصال…"
+
+
+class _SendAllAdapter:
+    """Shim so A520i.send_to_printer can write via QTcpSocket / QSerialPort."""
+
+    def __init__(self, link: QTcpSocket | Any) -> None:
+        self._link = link
+
+    def sendall(self, data: bytes) -> None:
+        if not data:
+            return
+
+        offset = 0
+        while offset < len(data):
+            chunk = data[offset:]
+            if isinstance(self._link, QTcpSocket):
+                if self._link.state() != QAbstractSocket.SocketState.ConnectedState:
+                    raise OSError(self._link.errorString() or "QTcpSocket is not connected")
+                written = self._link.write(chunk)
+            elif QSerialPort is not None and isinstance(self._link, QSerialPort):
+                if not self._link.isOpen():
+                    raise OSError("QSerialPort is not open")
+                written = self._link.write(chunk)
+            else:
+                raise OSError("Unsupported printer link type")
+
+            if written < 0:
+                if isinstance(self._link, QTcpSocket):
+                    raise OSError(self._link.errorString() or "QTcpSocket write failed")
+                raise OSError("QSerialPort write failed")
+            if written == 0:
+                # Buffer full: wait briefly, then retry (do not abort on slow printers).
+                self._link.waitForBytesWritten(10000)
+                continue
+            offset += written
+
+        self._link.flush()
+        # Best-effort drain; many printers never ACK quickly over TCP.
+        pending = int(self._link.bytesToWrite()) if hasattr(self._link, "bytesToWrite") else 0
+        attempts = 0
+        while pending > 0 and attempts < 10:
+            if isinstance(self._link, QTcpSocket):
+                if self._link.state() != QAbstractSocket.SocketState.ConnectedState:
+                    raise OSError(self._link.errorString() or "QTcpSocket disconnected during send")
+            elif QSerialPort is not None and isinstance(self._link, QSerialPort):
+                if not self._link.isOpen():
+                    raise OSError("QSerialPort closed during send")
+            self._link.waitForBytesWritten(3000)
+            pending = int(self._link.bytesToWrite()) if hasattr(self._link, "bytesToWrite") else 0
+            attempts += 1
 
 
 class UserHomePage(QWidget):
@@ -671,29 +725,79 @@ class UserHomePage(QWidget):
         edit = self._manual_edits.get(title)
         return edit.text().strip() if edit else ""
 
+    def _annotate_last_result(self, suffix: str) -> None:
+        row = self.results_table.rowCount() - 1
+        if row < 0:
+            return
+        item = self.results_table.item(row, 2)
+        if item is None:
+            return
+        base = item.text().strip()
+        item.setText(f"{base} | {suffix}" if base else suffix)
+
+    def _build_print_items(
+        self, product_values: dict[str, Any], priorities: list[dict[str, str]]
+    ) -> list[str]:
+        """Build non-empty print values in priority order (sent as one list to the printer)."""
+        items: list[str] = []
+        for item in priorities:
+            name = str(item.get("name", "")).strip()
+            source_type = str(item.get("source_type", "")).strip()
+            source_value = str(item.get("source_value", "")).strip()
+            if source_type == "manual":
+                text = self._manual_text(name)
+            elif source_type == "product_field" and source_value:
+                text = _format_cell_scalar(product_values.get(source_value))
+            else:
+                continue
+            text = text.strip()
+            if text:
+                items.append(text)
+        return items
+
     def _send_print_job(self, product_values: dict[str, Any]) -> None:
         printer_name = str(self._scanner_conn.get("target_printer", "")).strip()
         if not printer_name:
+            self._annotate_last_result("چاپ: پرینتر هدف برای اسکنر تنظیم نشده است")
             return
+
         cfg = dict(self._connections_flat.get(printer_name, {}))
-        raw_pri = cfg.get("print_priorities", [])
-        lines: list[str] = []
-        if isinstance(raw_pri, list):
-            for item in raw_pri:
-                if not isinstance(item, dict):
-                    continue
-                name = str(item.get("name", "")).strip()
-                st = str(item.get("source_type", "")).strip()
-                sv = str(item.get("source_value", "")).strip()
-                if st == "manual":
-                    lines.append(self._manual_text(name))
-                elif st == "product_field" and sv:
-                    raw_v = product_values.get(sv)
-                    lines.append(_format_cell_scalar(raw_v))
-                else:
-                    lines.append("")
-        payload = "\n".join(lines)
-        self._write_device_text(printer_name, payload + ("\n" if payload else ""))
+        priorities = resolve_print_priorities(cfg)
+        if not priorities:
+            self._annotate_last_result(
+                f"چاپ: برای دستگاه «{printer_name}» اولویت چاپ تعریف نشده است"
+            )
+            return
+
+        print_items = self._build_print_items(product_values, priorities)
+        if not print_items:
+            self._annotate_last_result("چاپ: متن خالی است (فیلدها مقدار ندارند)")
+            return
+
+        printer_type = _normalize_printer_type(cfg.get("printer_type", PRINTER_TYPE_A520I))
+        link = self._links.get(printer_name)
+        if link is None:
+            self._annotate_last_result(f"چاپ: اتصال به «{printer_name}» برقرار نیست")
+            return
+
+        connected = isinstance(link, QTcpSocket) and link.state() == QAbstractSocket.SocketState.ConnectedState
+        serial_open = QSerialPort is not None and isinstance(link, QSerialPort) and link.isOpen()
+        if not connected and not serial_open:
+            self._annotate_last_result(f"چاپ: اتصال به «{printer_name}» قطع شده است")
+            return
+
+        if printer_type == PRINTER_TYPE_A520I:
+            adapter = _SendAllAdapter(link)
+            if send_to_printer(print_items, adapter):
+                count_label = f"{len(print_items)} مورد"
+                self._annotate_last_result(f"چاپ: ارسال {count_label} به «{printer_name}» انجام شد")
+            else:
+                self._annotate_last_result(f"چاپ: خطا در ارسال به «{printer_name}»")
+            return
+
+        payload = "\n".join(print_items) + "\n"
+        self._write_device_text(printer_name, payload)
+        self._annotate_last_result(f"چاپ: ارسال {len(print_items)} مورد به «{printer_name}» انجام شد")
 
     def _trigger_rejector_sequence(self) -> None:
         rname = str(self._scanner_conn.get("target_rejector", "")).strip()
